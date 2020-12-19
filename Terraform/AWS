@@ -1,0 +1,146 @@
+# Build VPC
+# Subnet create
+# commission EC2 instance and then install Web service
+# Create security group and attach to EC2 instance
+# Internet Gateway for allowing EC2 instance external NW
+# enable route to external NW
+# associate route table to subnet
+# public IP for instance
+
+WARNING : your keys are to be included in this script which is security risk. There are many ways to secure your keys in Terraform, which will be shared in coming days.
+
+#Provider
+provider "aws" {
+  region = "us-east-1"
+ access_key = "type your access key"
+ secret_key = "type for your key"
+}
+
+
+# VPC
+
+resource "aws_vpc" "MyFirstVPC" {
+  cidr_block       = "10.0.0.0/16"
+  instance_tenancy = "default"
+    tags = {
+    Name = "PROD VPC"
+    
+  }
+}
+
+
+# Subnet
+resource "aws_subnet" "Public_T2" {
+  vpc_id     = aws_vpc.MyFirstVPC.id
+  cidr_block = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
+  map_public_ip_on_launch = true
+
+  depends_on = [aws_internet_gateway.MyIGW]
+
+  tags = {
+    Name = "Public_T2_Web"
+  }
+}
+
+
+
+# Web server
+
+resource "aws_instance" "WebServer" {
+  ami           = "ami-096fda3c22c1c990a"
+  instance_type = "t2.micro"
+  subnet_id = aws_subnet.Public_T2.id
+  private_ip = "10.0.1.50"
+
+# Install Web service
+
+  user_data = <<-EOF
+                #! /bin/bash
+                sudo yum install httpd -y
+                sudo systemctl start httpd
+                sudo systemctl enable httpd
+                echo "<h1>My First Web server through Terraform</h1>" | sudo tee  /var/www/html/index.html
+  EOF
+
+tags= {
+    name = "Web"
+}
+
+}
+
+
+  # Security group
+# public to Web
+
+resource "aws_security_group" "allow_WebPort" {
+  name        = "allow_WebPort"
+  description = "Allow 80"
+  vpc_id      = aws_vpc.MyFirstVPC.id
+
+  ingress {
+    description = "Web from VPC"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "Web Servers_SG"
+  }
+}
+
+# attach SG to Instance
+ resource "aws_network_interface_sg_attachment" "sg_attachment"{
+  security_group_id    = aws_security_group.allow_WebPort.id
+  network_interface_id = aws_instance.WebServer.primary_network_interface_id
+ }
+
+
+
+# IGW
+
+resource "aws_internet_gateway" "MyIGW" {
+  vpc_id = aws_vpc.MyFirstVPC.id
+
+  tags = {
+    Name = "My First IGW"
+  }
+}
+
+# Routing
+
+resource "aws_route_table" "MyWebRT" {
+  vpc_id = aws_vpc.MyFirstVPC.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+  
+    gateway_id = aws_internet_gateway.MyIGW.id
+  }
+  
+
+}
+
+# Associate route table
+resource "aws_route_table_association" "Web" {
+  subnet_id      = aws_subnet.Public_T2.id
+  route_table_id = aws_route_table.MyWebRT.id
+}
+
+
+
+# EIP
+resource "aws_eip" "PublicIP_Web" {
+  vpc                       = true
+  associate_with_private_ip = "10.0.1.50"
+  depends_on = [aws_internet_gateway.MyIGW]
+}
